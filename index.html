@@ -46,6 +46,7 @@ var CFG = {
   SUBTITLE: "CHICHI's Bizarre Adventure",
   TAP_TO_START: '화면을 탭하여 시작',
   TAP_TO_TITLE: '화면을 탭하여 타이틀로',
+  CLEAR_MESSAGE: '치치와 토토의 기묘한 모험은 앞으로도 계속 된다...',
 
   VW: 540, VH: 960,          // 논리 해상도(세로형)
   SAFE_TOP: 28,              // 모바일 안전영역 여백
@@ -76,6 +77,7 @@ var CFG = {
     mainInterval: 0.135, mainDmg: 8,  mainSpeed: 620,
     optInterval:  0.16,  optDmg:  6,  optSpeed:  580,
     homInterval:  1.5,   homDmg:  60, homSpeed:  340, homTurn: 5.0,
+    homTurnRamp:  1.6,   homLife: 4.0,   // 표적 주위를 계속 맴돌지 않도록 선회력이 커지고 수명이 있다
     fanSpread: 0.30      // 6단계 부채꼴 반각(라디안)
   },
 
@@ -832,6 +834,12 @@ var G = {
   reachedRound: 1
 };
 
+/* 잡몹을 배열에서 비울 때는 alive를 내려야 유도탄이 사라진 적을 계속 쫓지 않는다 */
+function clearEnemies(){
+  for (var i = 0; i < G.enemies.length; i++) G.enemies[i].alive = false;
+  G.enemies.length = 0;
+}
+
 function makePlayer(){
   return {
     x: CFG.VW / 2, y: 800, vx: 0, vy: 0,
@@ -841,7 +849,7 @@ function makePlayer(){
 }
 
 function resetAll(){
-  G.enemies.length = 0; G.ebullets.length = 0; G.pbullets.length = 0;
+  clearEnemies(); G.ebullets.length = 0; G.pbullets.length = 0;
   G.items.length = 0; G.particles.length = 0; G.texts.length = 0; G.warns.length = 0;
   G.boss = null; G.dialog = null;
   G.shake = 0; G.flash = 0; G.slowmo = 0;
@@ -1059,6 +1067,13 @@ function playerFire(dt){
   }
 }
 
+/* 화면에서 이미 정리된 적을 표적으로 잡고 있지 않은지 확인 */
+function isValidTarget(t){
+  if (!t) return false;
+  if (t === G.boss) return !!(G.boss && G.boss.alive && G.boss.fighting);
+  for (var i = 0; i < G.enemies.length; i++) if (G.enemies[i] === t) return true;
+  return false;
+}
 function findHomingTarget(b){
   var best = null, bd = Infinity;
   for (var i = 0; i < G.enemies.length; i++){
@@ -1077,14 +1092,22 @@ function updatePBullets(dt){
     var b = G.pbullets[i];
     b.t += dt;
     if (b.kind === 'homing'){
-      if (!b.tgt || !b.tgt.alive) b.tgt = findHomingTarget(b);
+      // 수명이 다하면 스스로 소멸(제자리 선회 방지)
+      if (b.t >= F.homLife){
+        burst(b.x, b.y, 5, '#8ff0ff', 130, 3);
+        G.pbullets.splice(i, 1);
+        continue;
+      }
+      if (!b.tgt || !b.tgt.alive || !isValidTarget(b.tgt)) b.tgt = findHomingTarget(b);
       if (b.tgt && b.tgt.alive){
         var want = Math.atan2(b.tgt.y - b.y, b.tgt.x - b.x);
         var cur = Math.atan2(b.vy, b.vx);
         var diff = want - cur;
         while (diff > PI) diff -= TAU;
         while (diff < -PI) diff += TAU;
-        var turn = clamp(diff, -F.homTurn * dt, F.homTurn * dt);
+        // 시간이 지날수록 더 급하게 꺾여 표적을 지나쳐도 다시 파고든다
+        var rate = F.homTurn * (1 + b.t * F.homTurnRamp);
+        var turn = clamp(diff, -rate * dt, rate * dt);
         var na = cur + turn;
         b.vx = Math.cos(na) * F.homSpeed; b.vy = Math.sin(na) * F.homSpeed;
       } else {
@@ -1776,7 +1799,7 @@ function bossDie(B){
   B.alive = false; B.fighting = false;
   G.ebullets.length = 0;                 // 사망 즉시 적 탄막 제거
   G.warns.length = 0;
-  G.enemies.length = 0;
+  clearEnemies();
   G.score += CFG.SCORE.bossKill[B.round] + G.hearts * CFG.SCORE.survivePerHeart;
   shake(15); flash(0.85, '255,240,200');
   G.slowmo = 0.35;
@@ -1843,7 +1866,7 @@ function enterWaveClear(){
     var m = G.enemies[i];
     burst(m.x, m.y, 8, '#9ad8ff', 160, 4);
   }
-  G.enemies.length = 0;
+  clearEnemies();
   G.ebullets.length = 0;
   G.warns.length = 0;
 }
@@ -2667,7 +2690,12 @@ function drawClear(){
   var jump = Math.abs(Math.sin(G.time * 5)) * 22;
   drawChar('player', CFG.VW / 2, 590 - jump, CFG.ART.clearH, { fallback:'chichi' });
   ctx.fillStyle = 'rgba(255,255,255,0.15)';
-  ctx.beginPath(); ctx.ellipse(CFG.VW / 2, 640, 40, 8, 0, 0, TAU); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(CFG.VW / 2, 660, 44, 8, 0, 0, TAU); ctx.fill();
+  ctx.font = 'bold 17px ' + FONT;
+  ctx.fillStyle = '#000000';
+  ctx.fillText(CFG.CLEAR_MESSAGE, CFG.VW / 2 + 1, 707);
+  ctx.fillStyle = '#c8d4f0';
+  ctx.fillText(CFG.CLEAR_MESSAGE, CFG.VW / 2, 706);
   if (G.stateT > CFG.POPUP_DELAY && Math.floor(G.time * 1.8) % 2 === 0){
     ctx.font = 'bold 18px ' + FONT;
     ctx.fillStyle = '#c8d4f0';
